@@ -1,4 +1,5 @@
 import argparse
+import os
 import numpy as np
 import joblib
 import mlflow
@@ -6,8 +7,39 @@ import mlflow.sklearn
 from model_pipeline1 import prepare_data, train_model, evaluate_model, save_model, load_model
 from elasticsearch import Elasticsearch
 
+
+def _get_tracking_uri():
+    """Return the MLflow tracking URI.
+
+    The Jenkins pipeline starts MLflow through docker-compose where the
+    service is exposed on the host machine at port 8090.  The previous
+    implementation hard coded ``http://0.0.0.0:8000`` which does not
+    correspond to the running service and therefore resulted in connection
+    errors when the training stage executed.
+
+    We first look for a ``MLFLOW_TRACKING_URI`` environment variable (to keep
+    local overrides easy) and otherwise default to ``http://localhost:8090``
+    which matches the docker-compose configuration.
+    """
+
+    return os.getenv("MLFLOW_TRACKING_URI", "http://localhost:8090")
+
+
+def _get_elasticsearch_client():
+    """Return an Elasticsearch client reachable from the host.
+
+    When executed from Jenkins (outside the Docker network), the hostname
+    ``elasticsearch`` is not resolvable.  We therefore default to the host
+    mapped port.  The hostname can still be overridden through the
+    ``ELASTICSEARCH_HOST`` environment variable if needed.
+    """
+
+    es_host = os.getenv("ELASTICSEARCH_HOST", "http://localhost:9200")
+    return Elasticsearch(es_host)
+
+
 # Connexion à Elasticsearch
-es = Elasticsearch("http://elasticsearch:9200")
+es = _get_elasticsearch_client()
 
 def log_to_elasticsearch(metrics):
     """ Envoie les métriques MLflow vers Elasticsearch """
@@ -26,7 +58,7 @@ def main():
     args = parser.parse_args()
     
     # Définir l'expérience MLflow
-    mlflow.set_tracking_uri("http://0.0.0.0:8000")  # Utiliser MLflow sans SQLite
+    mlflow.set_tracking_uri(_get_tracking_uri())  # Utiliser MLflow sans SQLite
     mlflow.set_experiment("Churn Prediction")
     
     with mlflow.start_run():
