@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.venv/
+venv/
+.env
+.ipynb_checkpoints/
+*.log
+
+# ML artifacts
+*.pkl
+mlruns/
+models/
+runs/
+
+# Data / DB (keep if data is large/private)
+*.db
+*.sqlite3
+postgres_data/
+*.csv
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store
+
+# Node (if any)
+node_modules/
+

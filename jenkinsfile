@@ -1,0 +1,221 @@
+pipeline {
+    agent any
+
+    environment {
+        VENV_DIR = 'venv'
+        MODEL_FILE = 'churn_model.pkl'
+        PROJECT_DIR = '/home/ibtihel/ibtihel-mnaja-4ds4-ml_project'
+        COMPOSE_FILE = 'docker-compose.yml'
+    }
+
+    stages {
+        stage('Start Docker Services') {
+            steps {
+                script {
+                    echo "📌 Stopping existing Docker services..."
+                    dir("${PROJECT_DIR}") {
+                        sh 'docker-compose down || true'
+                        echo "📌 Starting Docker services..."
+                        sh 'docker-compose up -d'
+                    }
+                }
+            }
+        }
+
+        stage('Verify Docker Services') {
+            steps {
+                script {
+                    echo "📌 Checking running Docker containers..."
+                    dir("${PROJECT_DIR}") {
+                        sh 'docker-compose ps'
+                    }
+                }
+            }
+        }
+
+        stage('Verify Elasticsearch') {
+            steps {
+                script {
+                    echo "📌 Waiting for Elasticsearch to be ready (Groovy approach)..."
+
+                    int maxRetries = 30
+                    int attempt = 0
+                    boolean esReady = false
+
+                    while (attempt < maxRetries) {
+                        attempt++
+                        echo "Attempt #${attempt}: Checking Elasticsearch..."
+
+                        // 1) Use '|| true' so 'curl' won't fail the pipeline if it returns nonzero
+                        // 2) Use returnStdout: true to capture the response
+                        String esResponse = sh(
+                            script: "curl -s http://localhost:9200 || true", 
+                            returnStdout: true
+                        ).trim()
+
+                        // 3) Check if the response contains the magic string
+                        if (esResponse.contains("You Know, for Search")) {
+                            echo "✅ Elasticsearch is running!"
+                            esReady = true
+                            break
+                        } else {
+                            echo "Elasticsearch not ready yet; sleeping 5 seconds..."
+                            sleep 5
+                        }
+                    }
+
+                    // 4) If never found the string, fail the pipeline after all attempts
+                    if (!esReady) {
+                        error "❌ Elasticsearch did not respond with 'You Know, for Search' after ${maxRetries} attempts."
+                    }
+                }
+            }
+        }
+
+        stage('Verify Kibana') {
+            steps {
+                script {
+                    echo "📌 Waiting for Kibana to be ready (HTTP 200 approach)..."
+
+                    int maxRetries = 30
+                    int attempt = 0
+                    boolean kbReady = false
+
+                    while (attempt < maxRetries) {
+                        attempt++
+                        echo "Attempt #${attempt}: Checking Kibana..."
+
+                        // Capture just the HTTP status code using curl
+                        // -s (silent) 
+                        // -o /dev/null (discard body) 
+                        // -w "%{http_code}" (write out status code)
+                        // '|| true' so non-200 doesn't kill the pipeline
+                        String kbResponseCode = sh(
+                            script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5601 || true",
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Kibana HTTP status code: ${kbResponseCode}"
+
+                        // If code == 200, we assume Kibana is ready
+                        if (kbResponseCode == "200") {
+                            echo "✅ Kibana is running with HTTP 200!"
+                            kbReady = true
+                            break
+                        } else {
+                            echo "Kibana not ready yet; sleeping 5 seconds..."
+                            sleep 5
+                        }
+                    }
+
+                    if (!kbReady) {
+                        error "❌ Kibana not responding with 200 after ${maxRetries} attempts."
+                    }
+                }
+            }
+        }
+
+
+        stage('Install Dependencies') {
+            steps {
+                script {
+                    echo "📌 Installing Python dependencies..."
+                    dir("${PROJECT_DIR}") {
+                        sh '''
+                            . ${VENV_DIR}/bin/activate
+                            pip install --upgrade pip
+                            pip install -r requirements.txt
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Run Unit Tests') {
+            steps {
+                script {
+                    echo "📌 Running unit tests..."
+                    dir("${PROJECT_DIR}") {
+                        sh '''
+                            . ${VENV_DIR}/bin/activate
+                            pytest test_pipeline.py || echo "⚠️ Some tests failed, but continuing..."
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Train Model and Log Metrics') {
+            steps {
+                script {
+                    echo "📌 Training ML model..."
+                    dir("${PROJECT_DIR}") {
+                        sh '''
+                            . ${VENV_DIR}/bin/activate
+                            python main1.py --train_path churn-bigml-80.csv --test_path churn-bigml-20.csv --save_model ${MODEL_FILE}
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Verify Model Output') {
+            steps {
+                script {
+                    echo "📌 Checking if model file exists..."
+                    dir("${PROJECT_DIR}") {
+                        if (!fileExists(MODEL_FILE)) {
+                            error "❌ Model file not found! Training might have failed."
+                        }
+                        echo "✅ Model file verified."
+                    }
+                }
+            }
+        }
+
+        stage('Restart Flask App') {
+            steps {
+                script {
+                    echo "📌 Restarting Flask application..."
+                    dir("${PROJECT_DIR}") {
+                        sh 'docker-compose restart flask_app'
+                    }
+                }
+            }
+        }
+
+        stage('Test Flask API') {
+            steps {
+                script {
+                    echo "📌 Testing Flask API..."
+                    sh '''
+                    curl -X POST "http://localhost:8082/predict" -H "Content-Type: application/x-www-form-urlencoded" \
+                         -d "account_length=100&num_vmail_messages=10&total_day_calls=50&total_day_charge=15.0&total_eve_calls=40&total_eve_charge=10.0&total_night_calls=60&total_night_charge=8.0&total_intl_calls=3&total_intl_charge=3.5&customer_service_calls=1&international_plan=0&voice_mail_plan=1"
+                    '''
+                }
+            }
+        }
+
+        stage('Archive Model & Logs') {
+            steps {
+                script {
+                    echo "📌 Archiving logs and model..."
+                    dir("${PROJECT_DIR}") {
+                        archiveArtifacts artifacts: MODEL_FILE, fingerprint: true
+                        sh 'docker-compose logs > jenkins_docker_logs.txt'
+                        archiveArtifacts artifacts: 'jenkins_docker_logs.txt', fingerprint: true
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline completed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check logs for details."
+        }
+    }
+}

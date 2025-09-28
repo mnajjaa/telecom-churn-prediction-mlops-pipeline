@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Churn Prediction</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h2>Churn Prediction Model</h2>
+        <form action="/predict" method="post" class="prediction-form">
+            
+            <!-- Row 1 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Account Length:</label>
+                    <input type="number" step="any" name="account_length" required>
+                </div>
+                <div class="form-group">
+                    <label>Numr of Voicemail Msg:</label>
+                    <input type="number" step="any" name="num_vmail_messages" required>
+                </div>
+            </div>
+
+            <!-- Row 2 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Total Day Calls:</label>
+                    <input type="number" step="any" name="total_day_calls" required>
+                </div>
+                <div class="form-group">
+                    <label>Total Day Charge:</label>
+                    <input type="number" step="any" name="total_day_charge" required>
+                </div>
+            </div>
+
+            <!-- Row 3 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Total Eve Calls:</label>
+                    <input type="number" step="any" name="total_eve_calls" required>
+                </div>
+                <div class="form-group">
+                    <label>Total Eve Charge:</label>
+                    <input type="number" step="any" name="total_eve_charge" required>
+                </div>
+            </div>
+
+            <!-- Row 4 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Total Night Calls:</label>
+                    <input type="number" step="any" name="total_night_calls" required>
+                </div>
+                <div class="form-group">
+                    <label>Total Night Charge:</label>
+                    <input type="number" step="any" name="total_night_charge" required>
+                </div>
+            </div>
+
+            <!-- Row 5 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Total International Calls:</label>
+                    <input type="number" step="any" name="total_intl_calls" required>
+                </div>
+                <div class="form-group">
+                    <label>Total International Charge:</label>
+                    <input type="number" step="any" name="total_intl_charge" required>
+                </div>
+            </div>
+
+            <!-- Row 6 -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Customer Service Calls:</label>
+                    <input type="number" step="any" name="customer_service_calls" required>
+                </div>
+            </div>
+
+            <!-- Row 7 - Dropdowns -->
+            <div class="form-row">
+                <div class="form-group">
+                    <label>International Plan:</label>
+                    <select name="international_plan" required>
+                        <option value="0">No</option>
+                        <option value="1">Yes</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Voice Mail Plan:</label>
+                    <select name="voice_mail_plan" required>
+                        <option value="0">No</option>
+                        <option value="1">Yes</option>
+                    </select>
+                </div>
+            </div>
+
+            <button type="submit" class="predict-btn">Predict</button>
+        </form>
+
+        {% if prediction_text %}
+            <h3 class="prediction-result">{{ prediction_text }}</h3>
+        {% endif %}
+    </div>
+</body>
+</html>

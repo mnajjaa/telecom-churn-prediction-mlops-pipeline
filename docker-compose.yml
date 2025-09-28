@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # --- Elasticsearch ---
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.5.3
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+    ports:
+      - "9200:9200"
+    networks:
+      - app_network
+
+  # --- Kibana ---
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.5.3
+    container_name: kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - xpack.security.enabled=false
+    ports:
+      - "5601:5601"
+    depends_on:
+      - elasticsearch
+    networks:
+      - app_network
+
+  # --- Postgres ---
+  db:
+    image: postgres:latest
+    container_name: postgres_db
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: predictions_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  # --- MLflow ---
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.12.1
+    container_name: mlflow
+    environment:
+      - MLFLOW_TRACKING_URI=http://0.0.0.0:8090
+    command: mlflow ui --host 0.0.0.0 --port 8090
+    ports:
+      - "8090:8090"
+    networks:
+      - app_network
+
+  # --- Flask ---
+  flask_app:
+    build: .
+    container_name: flask_app
+    ports:
+      - "8082:8082"
+    depends_on:
+      - db
+      - mlflow
+    environment:
+      - DATABASE_URL=postgresql://admin:admin@db:5432/predictions_db
+    networks:
+      - app_network
+
+volumes:
+  postgres_data:
+
+networks:
+  app_network:
+    driver: bridge
