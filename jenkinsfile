@@ -2,21 +2,41 @@ pipeline {
     agent any
 
     environment {
-        VENV_DIR = 'venv'
+        VENV_DIR = '.venv'
         MODEL_FILE = 'churn_model.pkl'
-        PROJECT_DIR = '/home/ibtihel/ibtihel-mnaja-4ds4-ml_project'
         COMPOSE_FILE = 'docker-compose.yml'
+        PYTHON_BIN = 'python3'
     }
 
     stages {
+        stage('Prepare Environment') {
+            steps {
+                script {
+                    env.PROJECT_DIR = env.WORKSPACE
+                    env.COMPOSE_CMD = sh(
+                        script: 'if command -v docker-compose >/dev/null 2>&1; then echo docker-compose; else echo "docker compose"; fi',
+                        returnStdout: true
+                    ).trim()
+
+                    dir(env.PROJECT_DIR) {
+                        if (!fileExists(env.COMPOSE_FILE)) {
+                            error "❌ Unable to find ${env.COMPOSE_FILE} in ${env.PROJECT_DIR}."
+                        }
+                    }
+                }
+            }
+        }
+
         stage('Start Docker Services') {
             steps {
                 script {
                     echo "📌 Stopping existing Docker services..."
-                    dir("${PROJECT_DIR}") {
-                        sh 'docker-compose down || true'
-                        echo "📌 Starting Docker services..."
-                        sh 'docker-compose up -d'
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            ${env.COMPOSE_CMD} -f ${COMPOSE_FILE} down || true
+                            echo "📌 Starting Docker services..."
+                            ${env.COMPOSE_CMD} -f ${COMPOSE_FILE} up -d
+                        """
                     }
                 }
             }
@@ -26,8 +46,10 @@ pipeline {
             steps {
                 script {
                     echo "📌 Checking running Docker containers..."
-                    dir("${PROJECT_DIR}") {
-                        sh 'docker-compose ps'
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            ${env.COMPOSE_CMD} -f ${COMPOSE_FILE} ps
+                        """
                     }
                 }
             }
@@ -46,14 +68,11 @@ pipeline {
                         attempt++
                         echo "Attempt #${attempt}: Checking Elasticsearch..."
 
-                        // 1) Use '|| true' so 'curl' won't fail the pipeline if it returns nonzero
-                        // 2) Use returnStdout: true to capture the response
                         String esResponse = sh(
-                            script: "curl -s http://localhost:9200 || true", 
+                            script: "curl -s http://localhost:9200 || true",
                             returnStdout: true
                         ).trim()
 
-                        // 3) Check if the response contains the magic string
                         if (esResponse.contains("You Know, for Search")) {
                             echo "✅ Elasticsearch is running!"
                             esReady = true
@@ -64,7 +83,6 @@ pipeline {
                         }
                     }
 
-                    // 4) If never found the string, fail the pipeline after all attempts
                     if (!esReady) {
                         error "❌ Elasticsearch did not respond with 'You Know, for Search' after ${maxRetries} attempts."
                     }
@@ -85,11 +103,6 @@ pipeline {
                         attempt++
                         echo "Attempt #${attempt}: Checking Kibana..."
 
-                        // Capture just the HTTP status code using curl
-                        // -s (silent) 
-                        // -o /dev/null (discard body) 
-                        // -w "%{http_code}" (write out status code)
-                        // '|| true' so non-200 doesn't kill the pipeline
                         String kbResponseCode = sh(
                             script: "curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5601 || true",
                             returnStdout: true
@@ -97,7 +110,6 @@ pipeline {
 
                         echo "Kibana HTTP status code: ${kbResponseCode}"
 
-                        // If code == 200, we assume Kibana is ready
                         if (kbResponseCode == "200") {
                             echo "✅ Kibana is running with HTTP 200!"
                             kbReady = true
@@ -115,17 +127,29 @@ pipeline {
             }
         }
 
+        stage('Setup Python Environment') {
+            steps {
+                dir(env.PROJECT_DIR) {
+                    sh """
+                        if [ ! -d "${VENV_DIR}" ]; then
+                            ${PYTHON_BIN} -m venv ${VENV_DIR}
+                        fi
+                    """
+                }
+            }
+        }
 
         stage('Install Dependencies') {
             steps {
                 script {
                     echo "📌 Installing Python dependencies..."
-                    dir("${PROJECT_DIR}") {
-                        sh '''
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            set -e
                             . ${VENV_DIR}/bin/activate
                             pip install --upgrade pip
-                            pip install -r requirements.txt
-                        '''
+                            pip install --no-cache-dir -r requirements.txt
+                        """
                     }
                 }
             }
@@ -135,11 +159,18 @@ pipeline {
             steps {
                 script {
                     echo "📌 Running unit tests..."
-                    dir("${PROJECT_DIR}") {
-                        sh '''
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            set +e
                             . ${VENV_DIR}/bin/activate
-                            pytest test_pipeline.py || echo "⚠️ Some tests failed, but continuing..."
-                        '''
+                            pytest test_pipeline.py
+                            test_status=$?
+                            set -e
+                            if [ ${test_status} -ne 0 ]; then
+                                echo "⚠️ Some tests failed, but continuing..."
+                            fi
+                            exit 0
+                        """
                     }
                 }
             }
@@ -149,11 +180,12 @@ pipeline {
             steps {
                 script {
                     echo "📌 Training ML model..."
-                    dir("${PROJECT_DIR}") {
-                        sh '''
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            set -e
                             . ${VENV_DIR}/bin/activate
                             python main1.py --train_path churn-bigml-80.csv --test_path churn-bigml-20.csv --save_model ${MODEL_FILE}
-                        '''
+                        """
                     }
                 }
             }
@@ -163,7 +195,7 @@ pipeline {
             steps {
                 script {
                     echo "📌 Checking if model file exists..."
-                    dir("${PROJECT_DIR}") {
+                    dir(env.PROJECT_DIR) {
                         if (!fileExists(MODEL_FILE)) {
                             error "❌ Model file not found! Training might have failed."
                         }
@@ -177,8 +209,10 @@ pipeline {
             steps {
                 script {
                     echo "📌 Restarting Flask application..."
-                    dir("${PROJECT_DIR}") {
-                        sh 'docker-compose restart flask_app'
+                    dir(env.PROJECT_DIR) {
+                        sh """
+                            ${env.COMPOSE_CMD} -f ${COMPOSE_FILE} restart flask_app
+                        """
                     }
                 }
             }
@@ -188,10 +222,10 @@ pipeline {
             steps {
                 script {
                     echo "📌 Testing Flask API..."
-                    sh '''
-                    curl -X POST "http://localhost:8082/predict" -H "Content-Type: application/x-www-form-urlencoded" \
-                         -d "account_length=100&num_vmail_messages=10&total_day_calls=50&total_day_charge=15.0&total_eve_calls=40&total_eve_charge=10.0&total_night_calls=60&total_night_charge=8.0&total_intl_calls=3&total_intl_charge=3.5&customer_service_calls=1&international_plan=0&voice_mail_plan=1"
-                    '''
+                    sh """
+                        curl -X POST "http://localhost:8082/predict" -H "Content-Type: application/x-www-form-urlencoded" \
+                             -d "account_length=100&num_vmail_messages=10&total_day_calls=50&total_day_charge=15.0&total_eve_calls=40&total_eve_charge=10.0&total_night_calls=60&total_night_charge=8.0&total_intl_calls=3&total_intl_charge=3.5&customer_service_calls=1&international_plan=0&voice_mail_plan=1"
+                    """
                 }
             }
         }
@@ -200,9 +234,11 @@ pipeline {
             steps {
                 script {
                     echo "📌 Archiving logs and model..."
-                    dir("${PROJECT_DIR}") {
+                    dir(env.PROJECT_DIR) {
                         archiveArtifacts artifacts: MODEL_FILE, fingerprint: true
-                        sh 'docker-compose logs > jenkins_docker_logs.txt'
+                        sh """
+                            ${env.COMPOSE_CMD} -f ${COMPOSE_FILE} logs > jenkins_docker_logs.txt
+                        """
                         archiveArtifacts artifacts: 'jenkins_docker_logs.txt', fingerprint: true
                     }
                 }
